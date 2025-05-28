@@ -2,8 +2,9 @@ import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuthStore } from '../stores/authStore'
 import { useEmailStore } from '../stores/emailStore'
-import { useEmailAccounts } from '../hooks/useAccounts'
+import { useEmailAccounts } from '../hooks/useAccount'
 import { useEmails, useUpdateEmail, useSyncEmails } from '../hooks/useEmails'
+import EmailViewer from '../components/EmailViewer'
 import { 
   Mail, 
   Send, 
@@ -31,6 +32,8 @@ const Dashboard = () => {
     setSearchQuery,
     setIsComposing 
   } = useEmailStore()
+
+  const [selectedEmailId, setSelectedEmailId] = useState<number | null>(null)
 
   // Fetch email accounts
   const { data: emailAccounts, isLoading: accountsLoading, error: accountsError } = useEmailAccounts()
@@ -78,7 +81,7 @@ const Dashboard = () => {
         updates: { is_read: true }
       })
     }
-    // TODO: Show email details in a modal or side panel
+    setSelectedEmailId(emailId)
   }
 
   const handleStarToggle = (emailId: number, isStarred: boolean) => {
@@ -91,6 +94,24 @@ const Dashboard = () => {
   const handleSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
     setSearchQuery(e.target.value)
     // TODO: Implement actual search functionality
+  }
+
+  const handleNextEmail = () => {
+    if (!selectedEmailId || !filteredEmails.length) return
+    
+    const currentIndex = filteredEmails.findIndex(email => email.id === selectedEmailId)
+    if (currentIndex < filteredEmails.length - 1) {
+      setSelectedEmailId(filteredEmails[currentIndex + 1].id)
+    }
+  }
+
+  const handlePreviousEmail = () => {
+    if (!selectedEmailId || !filteredEmails.length) return
+    
+    const currentIndex = filteredEmails.findIndex(email => email.id === selectedEmailId)
+    if (currentIndex > 0) {
+      setSelectedEmailId(filteredEmails[currentIndex - 1].id)
+    }
   }
 
   // Calculate folder counts (simplified - would need real counts from backend)
@@ -169,8 +190,22 @@ const Dashboard = () => {
     return email.folder === activeFolder && !email.is_deleted
   }) || []
 
+  const currentEmailIndex = selectedEmailId ? filteredEmails.findIndex(email => email.id === selectedEmailId) : -1
+
   return (
     <div className="h-screen flex bg-gray-50">
+      {/* Email Viewer Modal */}
+      {selectedEmailId && (
+        <EmailViewer
+          emailId={selectedEmailId}
+          onClose={() => setSelectedEmailId(null)}
+          onNext={handleNextEmail}
+          onPrevious={handlePreviousEmail}
+          hasNext={currentEmailIndex < filteredEmails.length - 1}
+          hasPrevious={currentEmailIndex > 0}
+        />
+      )}
+
       {/* Sidebar */}
       <div className="w-64 bg-white border-r border-gray-200 flex flex-col">
         {/* Header */}

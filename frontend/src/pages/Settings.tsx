@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { ArrowLeft, Plus, Settings as SettingsIcon, User, Mail, Check, X, Loader2, Trash2, Edit } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import { useEmailAccounts, useCreateEmailAccount, useDeleteEmailAccount, useTestEmailAccount } from '../hooks/useAccounts'
+import { useEmailAccounts, useCreateEmailAccount, useDeleteEmailAccount, useTestEmailAccount } from '../hooks/useAccount'
 import { useAuthStore } from '../stores/authStore'
 import { EmailAccountCreate } from '../services/api'
 

@@ -7,7 +7,7 @@ from typing import List, Optional, Tuple
 import logging
 import os
 
-from app.schemas.email import EmailCompose, EmailAddress
+from app.schemas.email import EmailCompose
 from app.schemas.account import EmailAccount
 
 logger = logging.getLogger(__name__)
@@ -71,9 +71,9 @@ class SMTPService:
             msg = self._create_message(email_data)
             
             # Get recipient emails
-            to_emails = [addr.email for addr in email_data.to_addresses]
-            cc_emails = [addr.email for addr in email_data.cc_addresses] if email_data.cc_addresses else []
-            bcc_emails = [addr.email for addr in email_data.bcc_addresses] if email_data.bcc_addresses else []
+            to_emails = [addr['email'] for addr in email_data.to_addresses]
+            cc_emails = [addr['email'] for addr in email_data.cc_addresses] if email_data.cc_addresses else []
+            bcc_emails = [addr['email'] for addr in email_data.bcc_addresses] if email_data.bcc_addresses else []
             
             all_recipients = to_emails + cc_emails + bcc_emails
             
@@ -93,11 +93,26 @@ class SMTPService:
         msg = MIMEMultipart('alternative')
         
         # Set headers
-        msg['From'] = f"{self.account.display_name} <{self.account.email_address}>" if self.account.display_name else self.account.email_address
-        msg['To'] = ', '.join([f"{addr.name} <{addr.email}>" if addr.name else addr.email for addr in email_data.to_addresses])
+        display_name = self.account.display_name or self.account.email_address
+        msg['From'] = f"{display_name} <{self.account.email_address}>"
+        
+        # Format recipients
+        to_list = []
+        for addr in email_data.to_addresses:
+            if addr.get('name'):
+                to_list.append(f"{addr['name']} <{addr['email']}>")
+            else:
+                to_list.append(addr['email'])
+        msg['To'] = ', '.join(to_list)
         
         if email_data.cc_addresses:
-            msg['Cc'] = ', '.join([f"{addr.name} <{addr.email}>" if addr.name else addr.email for addr in email_data.cc_addresses])
+            cc_list = []
+            for addr in email_data.cc_addresses:
+                if addr.get('name'):
+                    cc_list.append(f"{addr['name']} <{addr['email']}>")
+                else:
+                    cc_list.append(addr['email'])
+            msg['Cc'] = ', '.join(cc_list)
         
         msg['Subject'] = email_data.subject
         
@@ -109,6 +124,10 @@ class SMTPService:
         if email_data.body_html:
             html_part = MIMEText(email_data.body_html, 'html', 'utf-8')
             msg.attach(html_part)
+        
+        # If no body is provided, add a default text part
+        if not email_data.body_text and not email_data.body_html:
+            msg.attach(MIMEText("", 'plain', 'utf-8'))
         
         # Add attachments
         if email_data.attachments:
@@ -158,9 +177,9 @@ class SMTPService:
             msg['References'] = original_message_id
             
             # Get recipient emails
-            to_emails = [addr.email for addr in email_data.to_addresses]
-            cc_emails = [addr.email for addr in email_data.cc_addresses] if email_data.cc_addresses else []
-            bcc_emails = [addr.email for addr in email_data.bcc_addresses] if email_data.bcc_addresses else []
+            to_emails = [addr['email'] for addr in email_data.to_addresses]
+            cc_emails = [addr['email'] for addr in email_data.cc_addresses] if email_data.cc_addresses else []
+            bcc_emails = [addr['email'] for addr in email_data.bcc_addresses] if email_data.bcc_addresses else []
             
             all_recipients = to_emails + cc_emails + bcc_emails
             

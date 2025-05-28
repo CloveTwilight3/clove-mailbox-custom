@@ -23,3 +23,5 @@ flake8==6.0.0
 # Additional dependencies
 aiofiles==23.2.1
 pillow==10.0.0
+
+cryptography>=41.0.0

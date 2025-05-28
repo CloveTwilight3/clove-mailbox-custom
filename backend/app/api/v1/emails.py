@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from typing import List, Optional
+import logging
 
 from app.core.database import get_db
 from app.api.v1.auth import get_current_user
@@ -18,6 +19,7 @@ from app.services.imap_service import IMAPService
 from app.services.smtp_service import SMTPService
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.get("/", response_model=List[EmailSchema])
@@ -67,6 +69,28 @@ async def get_email(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Email not found"
         )
+    
+    # If we don't have body content, try to fetch it from IMAP
+    if not email.body_text and not email.body_html and email.uid:
+        try:
+            account = email.account
+            password = account.imap_password  # TODO: Decrypt password
+            
+            imap_service = IMAPService(account, password)
+            if imap_service.connect():
+                try:
+                    email_content = imap_service.get_email_content(email.uid)
+                    if email_content:
+                        # Update the email record with full content
+                        email.body_text = email_content.get('body_text')
+                        email.body_html = email_content.get('body_html')
+                        email.attachments = email_content.get('attachments')
+                        db.commit()
+                        logger.info(f"Updated email {email_id} with full content")
+                finally:
+                    imap_service.disconnect()
+        except Exception as e:
+            logger.warning(f"Could not fetch full email content for email {email_id}: {str(e)}")
     
     return email
 
@@ -147,9 +171,9 @@ async def compose_email(
             detail="Email account not found"
         )
     
-    # For demonstration, we'll use a placeholder password
-    # In production, you'd decrypt the stored password
-    password = "placeholder_password"  # TODO: Implement password decryption
+    # TODO: Implement proper password decryption
+    # For now, use stored password directly (NOT SECURE)
+    password = account.smtp_password
     
     try:
         # Send email via SMTP
@@ -165,6 +189,7 @@ async def compose_email(
         return {"message": "Email sent successfully"}
         
     except Exception as e:
+        logger.error(f"Error sending email: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error sending email: {str(e)}"
@@ -192,47 +217,102 @@ async def sync_emails(
             detail="Email account not found"
         )
     
-    # For demonstration, we'll use a placeholder password
-    password = "placeholder_password"  # TODO: Implement password decryption
+    # TODO: Implement proper password decryption
+    # For now, use stored password directly (NOT SECURE)
+    password = account.imap_password
     
     try:
         # Fetch emails via IMAP
-        with IMAPService(account, password) as imap:
-            email_list = imap.get_email_list(folder=folder)
+        imap_service = IMAPService(account, password)
+        
+        if not imap_service.connect():
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Could not connect to IMAP server"
+            )
+        
+        try:
+            logger.info(f"Starting email sync for account {account_id}, folder {folder}")
+            email_list = imap_service.get_email_list(folder=folder, limit=50)
+            logger.info(f"Retrieved {len(email_list)} emails from IMAP server")
             
             synced_count = 0
+            updated_count = 0
+            
             for email_data in email_list:
-                # Check if email already exists
-                existing = db.query(Email).filter(
-                    Email.message_id == email_data.get('message_id', ''),
-                    Email.account_id == account_id
-                ).first()
-                
-                if not existing:
-                    # Create new email record
-                    new_email = Email(
-                        account_id=account_id,
-                        message_id=email_data.get('message_id', ''),
-                        uid=email_data.get('uid'),
-                        subject=email_data.get('subject'),
-                        sender_email=email_data.get('sender_email', ''),
-                        sender_name=email_data.get('sender_name'),
-                        body_text=email_data.get('body_text'),
-                        body_html=email_data.get('body_html'),
-                        date_sent=email_data.get('date_sent'),
-                        date_received=email_data.get('date_received'),
-                        size=email_data.get('size', 0),
-                        folder=folder
-                    )
+                try:
+                    # Check if email already exists
+                    existing = db.query(Email).filter(
+                        Email.message_id == email_data.get('message_id', ''),
+                        Email.account_id == account_id
+                    ).first()
                     
-                    db.add(new_email)
-                    synced_count += 1
+                    if not existing:
+                        # For new emails, try to get full content if UID is available
+                        full_content = None
+                        if email_data.get('uid'):
+                            try:
+                                full_content = imap_service.get_email_content(email_data['uid'])
+                            except Exception as e:
+                                logger.debug(f"Could not fetch full content for UID {email_data.get('uid')}: {e}")
+                        
+                        # Use full content if available, otherwise use header data
+                        content_data = full_content if full_content else email_data
+                        
+                        # Create new email record
+                        new_email = Email(
+                            account_id=account_id,
+                            message_id=content_data.get('message_id', ''),
+                            uid=content_data.get('uid'),
+                            subject=content_data.get('subject'),
+                            sender_email=content_data.get('sender_email', ''),
+                            sender_name=content_data.get('sender_name'),
+                            reply_to=content_data.get('reply_to'),
+                            to_addresses=content_data.get('to_addresses'),
+                            body_text=content_data.get('body_text'),
+                            body_html=content_data.get('body_html'),
+                            attachments=content_data.get('attachments'),
+                            date_sent=content_data.get('date_sent'),
+                            date_received=content_data.get('date_received'),
+                            size=content_data.get('size', 0),
+                            is_read=content_data.get('is_read', False),
+                            folder=folder
+                        )
+                        
+                        db.add(new_email)
+                        synced_count += 1
+                    else:
+                        # Update existing email if read status changed
+                        if existing.is_read != email_data.get('is_read', False):
+                            existing.is_read = email_data.get('is_read', False)
+                            updated_count += 1
+                            
+                except Exception as e:
+                    logger.error(f"Error processing email {email_data.get('uid', 'unknown')}: {str(e)}")
+                    continue
+            
+            # Update account last sync time
+            from datetime import datetime
+            account.last_sync = datetime.utcnow()
             
             db.commit()
             
-        return {"message": f"Successfully synced {synced_count} emails"}
+            logger.info(f"Sync completed: {synced_count} new emails, {updated_count} updated emails")
+            
+        finally:
+            imap_service.disconnect()
+            
+        message = f"Successfully synced {synced_count} new emails"
+        if updated_count > 0:
+            message += f" and updated {updated_count} existing emails"
+            
+        return {"message": message}
         
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
     except Exception as e:
+        logger.error(f"Error syncing emails: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error syncing emails: {str(e)}"
