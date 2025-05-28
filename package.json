@@ -1,0 +1,22 @@
+{
+  "name": "email-client",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev:backend": "cd backend && python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000",
+    "dev:frontend": "cd frontend && npm run dev",
+    "dev:all": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "build": "npm run build:frontend",
+    "build:frontend": "cd frontend && npm run build",
+    "test": "npm run test:backend && npm run test:frontend",
+    "test:backend": "cd backend && python -m pytest",
+    "test:frontend": "cd frontend && npm test",
+    "install:all": "cd backend && pip install -r requirements.txt && cd ../frontend && npm install",
+    "format:backend": "cd backend && black . && isort .",
+    "format:frontend": "cd frontend && prettier --write . && eslint --fix .",
+    "format:all": "npm run format:backend && npm run format:frontend"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.0"
+  }
+}
