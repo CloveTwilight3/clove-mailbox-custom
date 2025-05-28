@@ -57,7 +57,7 @@ async def get_email(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Get a specific email by ID"""
+    """Get a specific email by ID - FIXED VERSION"""
     
     email = db.query(Email).join(EmailAccount).filter(
         Email.id == email_id,
@@ -76,21 +76,38 @@ async def get_email(
             account = email.account
             password = account.imap_password  # TODO: Decrypt password
             
+            logger.info(f"Fetching content for email {email_id} with UID {email.uid} from folder {email.folder}")
+            
+            # Create IMAP service and fetch content
             imap_service = IMAPService(account, password)
             if imap_service.connect():
                 try:
-                    email_content = imap_service.get_email_content(email.uid)
+                    # CRITICAL FIX: Pass the folder to get_email_content
+                    email_content = imap_service.get_email_content(email.uid, email.folder)
                     if email_content:
                         # Update the email record with full content
                         email.body_text = email_content.get('body_text')
                         email.body_html = email_content.get('body_html')
                         email.attachments = email_content.get('attachments')
+                        
+                        # Also update other fields if they're missing
+                        if not email.subject and email_content.get('subject'):
+                            email.subject = email_content.get('subject')
+                        if not email.sender_name and email_content.get('sender_name'):
+                            email.sender_name = email_content.get('sender_name')
+                        if not email.to_addresses and email_content.get('to_addresses'):
+                            email.to_addresses = email_content.get('to_addresses')
+                        
                         db.commit()
-                        logger.info(f"Updated email {email_id} with full content")
+                        logger.info(f"Successfully updated email {email_id} with full content")
+                    else:
+                        logger.warning(f"No content returned for email {email_id} UID {email.uid}")
                 finally:
                     imap_service.disconnect()
+            else:
+                logger.error(f"Failed to connect to IMAP server for email {email_id}")
         except Exception as e:
-            logger.warning(f"Could not fetch full email content for email {email_id}: {str(e)}")
+            logger.error(f"Could not fetch full email content for email {email_id}: {str(e)}")
     
     return email
 
@@ -114,6 +131,24 @@ async def update_email(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Email not found"
         )
+    
+    # If we're marking as read/unread, also update it on the server
+    if 'is_read' in email_update.dict(exclude_unset=True):
+        try:
+            account = email.account
+            password = account.imap_password  # TODO: Decrypt password
+            
+            imap_service = IMAPService(account, password)
+            if imap_service.connect():
+                try:
+                    if email_update.is_read:
+                        imap_service.mark_as_read(email.uid, email.folder)
+                    else:
+                        imap_service.mark_as_unread(email.uid, email.folder)
+                finally:
+                    imap_service.disconnect()
+        except Exception as e:
+            logger.warning(f"Could not update read status on server for email {email_id}: {str(e)}")
     
     # Update fields
     for field, value in email_update.dict(exclude_unset=True).items():
@@ -203,7 +238,7 @@ async def sync_emails(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Sync emails from IMAP server"""
+    """Sync emails from IMAP server - IMPROVED VERSION"""
     
     # Get the email account
     account = db.query(EmailAccount).filter(
@@ -238,6 +273,7 @@ async def sync_emails(
             
             synced_count = 0
             updated_count = 0
+            full_content_count = 0
             
             for email_data in email_list:
                 try:
@@ -248,11 +284,13 @@ async def sync_emails(
                     ).first()
                     
                     if not existing:
-                        # For new emails, try to get full content if UID is available
+                        # For new emails, try to get full content immediately
                         full_content = None
                         if email_data.get('uid'):
                             try:
-                                full_content = imap_service.get_email_content(email_data['uid'])
+                                full_content = imap_service.get_email_content(email_data['uid'], folder)
+                                if full_content:
+                                    full_content_count += 1
                             except Exception as e:
                                 logger.debug(f"Could not fetch full content for UID {email_data.get('uid')}: {e}")
                         
@@ -286,6 +324,19 @@ async def sync_emails(
                         if existing.is_read != email_data.get('is_read', False):
                             existing.is_read = email_data.get('is_read', False)
                             updated_count += 1
+                        
+                        # If existing email doesn't have content, try to fetch it
+                        if not existing.body_text and not existing.body_html and existing.uid:
+                            try:
+                                full_content = imap_service.get_email_content(existing.uid, folder)
+                                if full_content:
+                                    existing.body_text = full_content.get('body_text')
+                                    existing.body_html = full_content.get('body_html')
+                                    existing.attachments = full_content.get('attachments')
+                                    updated_count += 1
+                                    full_content_count += 1
+                            except Exception as e:
+                                logger.debug(f"Could not fetch full content for existing email {existing.id}: {e}")
                             
                 except Exception as e:
                     logger.error(f"Error processing email {email_data.get('uid', 'unknown')}: {str(e)}")
@@ -297,7 +348,7 @@ async def sync_emails(
             
             db.commit()
             
-            logger.info(f"Sync completed: {synced_count} new emails, {updated_count} updated emails")
+            logger.info(f"Sync completed: {synced_count} new emails, {updated_count} updated emails, {full_content_count} with full content")
             
         finally:
             imap_service.disconnect()
@@ -305,6 +356,8 @@ async def sync_emails(
         message = f"Successfully synced {synced_count} new emails"
         if updated_count > 0:
             message += f" and updated {updated_count} existing emails"
+        if full_content_count > 0:
+            message += f" ({full_content_count} with full content)"
             
         return {"message": message}
         

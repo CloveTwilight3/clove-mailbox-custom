@@ -17,6 +17,7 @@ class IMAPService:
         self.account = account
         self.password = password
         self.connection = None
+        self.current_folder = None
         
     def connect(self) -> bool:
         """Connect to IMAP server"""
@@ -54,13 +55,19 @@ class IMAPService:
             except:
                 pass
             self.connection = None
+            self.current_folder = None
     
     def test_connection(self) -> Tuple[bool, Optional[str]]:
         """Test IMAP connection"""
         try:
             if self.connect():
-                self.disconnect()
-                return True, None
+                # Test selecting a folder
+                if self.select_folder("INBOX"):
+                    self.disconnect()
+                    return True, None
+                else:
+                    self.disconnect()
+                    return False, "Could not select INBOX folder"
             return False, "Failed to connect"
         except Exception as e:
             return False, str(e)
@@ -91,21 +98,35 @@ class IMAPService:
             return ["INBOX"]
     
     def select_folder(self, folder: str = "INBOX") -> bool:
-        """Select a folder"""
+        """Select a folder - CRITICAL FIX"""
         if not self.connection:
             if not self.connect():
+                logger.error("Cannot select folder: not connected to IMAP server")
                 return False
             
         try:
+            logger.info(f"Selecting folder: {folder}")
             status, messages = self.connection.select(folder)
-            return status == 'OK'
+            if status == 'OK':
+                self.current_folder = folder
+                logger.info(f"Successfully selected folder: {folder}")
+                return True
+            else:
+                logger.error(f"Failed to select folder {folder}: {status}")
+                return False
         except Exception as e:
             logger.error(f"Error selecting folder {folder}: {str(e)}")
             return False
     
+    def ensure_folder_selected(self, folder: str = "INBOX") -> bool:
+        """Ensure the correct folder is selected before any operations"""
+        if self.current_folder != folder:
+            return self.select_folder(folder)
+        return True
+    
     def get_email_list(self, folder: str = "INBOX", limit: int = 50) -> List[Dict]:
         """Get list of emails from folder"""
-        if not self.select_folder(folder):
+        if not self.ensure_folder_selected(folder):
             logger.error(f"Failed to select folder: {folder}")
             return []
             
@@ -154,18 +175,21 @@ class IMAPService:
             logger.error(f"Error getting email list from folder {folder}: {str(e)}")
             return []
     
-    def get_email_content(self, uid: str) -> Optional[Dict]:
-        """Get full email content by UID"""
-        if not self.connection:
-            if not self.connect():
-                return None
+    def get_email_content(self, uid: str, folder: str = "INBOX") -> Optional[Dict]:
+        """Get full email content by UID - FIXED VERSION"""
+        # Ensure we're connected and have the right folder selected
+        if not self.ensure_folder_selected(folder):
+            logger.error(f"Failed to select folder {folder} for UID {uid}")
+            return None
             
         try:
-            # First try to fetch by UID
+            logger.info(f"Fetching email content for UID {uid} in folder {folder}")
+            
+            # Fetch the complete email
             status, msg_data = self.connection.fetch(uid, '(RFC822)')
             
             if status != 'OK' or not msg_data or not msg_data[0]:
-                logger.warning(f"Failed to fetch email content for UID {uid}")
+                logger.warning(f"Failed to fetch email content for UID {uid}: status={status}")
                 return None
                 
             email_body = msg_data[0][1]
@@ -173,6 +197,7 @@ class IMAPService:
                 logger.warning(f"No email body data for UID {uid}")
                 return None
                 
+            # Parse the email message
             email_message = email.message_from_bytes(email_body)
             parsed_data = self._parse_email_message(email_message, uid)
             
@@ -184,18 +209,19 @@ class IMAPService:
                     parsed_data['is_read'] = '\\Seen' in flags_line
             except Exception as e:
                 logger.debug(f"Could not fetch flags for UID {uid}: {e}")
+                parsed_data['is_read'] = False
             
+            logger.info(f"Successfully fetched email content for UID {uid}")
             return parsed_data
             
         except Exception as e:
             logger.error(f"Error getting email content for UID {uid}: {str(e)}")
             return None
     
-    def mark_as_read(self, uid: str) -> bool:
+    def mark_as_read(self, uid: str, folder: str = "INBOX") -> bool:
         """Mark email as read"""
-        if not self.connection:
-            if not self.connect():
-                return False
+        if not self.ensure_folder_selected(folder):
+            return False
             
         try:
             self.connection.store(uid, '+FLAGS', '\\Seen')
@@ -204,11 +230,10 @@ class IMAPService:
             logger.error(f"Error marking email as read: {str(e)}")
             return False
     
-    def mark_as_unread(self, uid: str) -> bool:
+    def mark_as_unread(self, uid: str, folder: str = "INBOX") -> bool:
         """Mark email as unread"""
-        if not self.connection:
-            if not self.connect():
-                return False
+        if not self.ensure_folder_selected(folder):
+            return False
             
         try:
             self.connection.store(uid, '-FLAGS', '\\Seen')
@@ -217,11 +242,10 @@ class IMAPService:
             logger.error(f"Error marking email as unread: {str(e)}")
             return False
     
-    def delete_email(self, uid: str) -> bool:
+    def delete_email(self, uid: str, folder: str = "INBOX") -> bool:
         """Delete email"""
-        if not self.connection:
-            if not self.connect():
-                return False
+        if not self.ensure_folder_selected(folder):
+            return False
             
         try:
             self.connection.store(uid, '+FLAGS', '\\Deleted')
@@ -336,7 +360,7 @@ class IMAPService:
                     'date_received': date_received,
                     'is_read': is_read,
                     'size': len(header_data) if header_data else 0,
-                    'folder': 'INBOX'  # Default folder, could be made dynamic
+                    'folder': self.current_folder or 'INBOX'
                 }
                 
             except Exception as e:
@@ -351,7 +375,7 @@ class IMAPService:
                     'date_received': datetime.now(),
                     'is_read': is_read,
                     'size': 0,
-                    'folder': 'INBOX'
+                    'folder': self.current_folder or 'INBOX'
                 }
             
         except Exception as e:
@@ -395,7 +419,7 @@ class IMAPService:
             message_id = msg.get('Message-ID', f'<local-{uid}>')
             reply_to = msg.get('Reply-To', '')
             
-            # Extract body
+            # Extract body - IMPROVED VERSION
             body_text = ""
             body_html = ""
             attachments = []
@@ -411,15 +435,19 @@ class IMAPService:
                             try:
                                 payload = part.get_payload(decode=True)
                                 if payload:
-                                    body_text = payload.decode('utf-8', errors='ignore')
-                            except:
+                                    charset = part.get_content_charset() or 'utf-8'
+                                    body_text = payload.decode(charset, errors='ignore')
+                            except Exception as e:
+                                logger.debug(f"Error decoding text part: {e}")
                                 pass
                         elif content_type == "text/html":
                             try:
                                 payload = part.get_payload(decode=True)
                                 if payload:
-                                    body_html = payload.decode('utf-8', errors='ignore')
-                            except:
+                                    charset = part.get_content_charset() or 'utf-8'
+                                    body_html = payload.decode(charset, errors='ignore')
+                            except Exception as e:
+                                logger.debug(f"Error decoding HTML part: {e}")
                                 pass
                     
                     # Handle attachments
@@ -435,14 +463,16 @@ class IMAPService:
                 try:
                     payload = msg.get_payload(decode=True)
                     if payload:
-                        decoded_payload = payload.decode('utf-8', errors='ignore')
+                        charset = msg.get_content_charset() or 'utf-8'
+                        decoded_payload = payload.decode(charset, errors='ignore')
                         if content_type == "text/plain":
                             body_text = decoded_payload
                         elif content_type == "text/html":
                             body_html = decoded_payload
                         else:
                             body_text = decoded_payload
-                except:
+                except Exception as e:
+                    logger.debug(f"Error decoding single part message: {e}")
                     pass
             
             return {
