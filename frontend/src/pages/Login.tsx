@@ -21,12 +21,13 @@ const Login = () => {
     setError('')
 
     try {
+      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000'
       const url = isLogin ? '/api/v1/auth/login' : '/api/v1/auth/register'
       const body = isLogin 
         ? { username: formData.username, password: formData.password }
         : formData
 
-      const response = await fetch(`${import.meta.env.VITE_API_URL}${url}`, {
+      const response = await fetch(`${apiUrl}${url}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -42,17 +43,21 @@ const Login = () => {
 
       if (isLogin) {
         // Get user info after login
-        const userResponse = await fetch(`${import.meta.env.VITE_API_URL}/api/v1/auth/me`, {
+        const userResponse = await fetch(`${apiUrl}/api/v1/auth/me`, {
           headers: {
             'Authorization': `Bearer ${data.access_token}`,
           },
         })
-        const userData = await userResponse.json()
         
+        if (!userResponse.ok) {
+          throw new Error('Failed to get user information')
+        }
+        
+        const userData = await userResponse.json()
         login(userData, data.access_token)
       } else {
         // Auto-login after registration
-        const loginResponse = await fetch(`${import.meta.env.VITE_API_URL}/api/v1/auth/login`, {
+        const loginResponse = await fetch(`${apiUrl}/api/v1/auth/login`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -62,15 +67,24 @@ const Login = () => {
             password: formData.password
           }),
         })
+        
+        if (!loginResponse.ok) {
+          throw new Error('Failed to login after registration')
+        }
+        
         const loginData = await loginResponse.json()
         
-        const userResponse = await fetch(`${import.meta.env.VITE_API_URL}/api/v1/auth/me`, {
+        const userResponse = await fetch(`${apiUrl}/api/v1/auth/me`, {
           headers: {
             'Authorization': `Bearer ${loginData.access_token}`,
           },
         })
-        const userData = await userResponse.json()
         
+        if (!userResponse.ok) {
+          throw new Error('Failed to get user information after registration')
+        }
+        
+        const userData = await userResponse.json()
         login(userData, loginData.access_token)
       }
     } catch (err) {
