@@ -3,6 +3,7 @@ import { useAuthStore } from './stores/authStore'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import Settings from './pages/Settings'
+import EmailPage from './pages/EmailPage'
 
 function App() {
   const { isAuthenticated } = useAuthStore()
@@ -17,6 +18,7 @@ function App() {
         <Route path="/" element={<Navigate to="/dashboard" replace />} />
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/settings" element={<Settings />} />
+        <Route path="/email/:emailId" element={<EmailPage />} />
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Routes>
     </div>

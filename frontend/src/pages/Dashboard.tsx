@@ -17,7 +17,10 @@ import {
   LogOut,
   RefreshCw,
   Loader2,
-  AlertCircle
+  AlertCircle,
+  ExternalLink,
+  Eye,
+  MoreHorizontal
 } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 
@@ -34,6 +37,17 @@ const Dashboard = () => {
   } = useEmailStore()
 
   const [selectedEmailId, setSelectedEmailId] = useState<number | null>(null)
+  const [contextMenu, setContextMenu] = useState<{
+    visible: boolean
+    x: number
+    y: number
+    emailId: number | null
+  }>({
+    visible: false,
+    x: 0,
+    y: 0,
+    emailId: null
+  })
 
   // Fetch email accounts
   const { data: emailAccounts, isLoading: accountsLoading, error: accountsError } = useEmailAccounts()
@@ -61,6 +75,18 @@ const Dashboard = () => {
   const updateEmailMutation = useUpdateEmail()
   const syncEmailsMutation = useSyncEmails()
 
+  // Hide context menu when clicking elsewhere
+  useEffect(() => {
+    const handleClickOutside = () => {
+      setContextMenu(prev => ({ ...prev, visible: false }))
+    }
+
+    if (contextMenu.visible) {
+      document.addEventListener('click', handleClickOutside)
+      return () => document.removeEventListener('click', handleClickOutside)
+    }
+  }, [contextMenu.visible])
+
   const handleLogout = () => {
     logout()
   }
@@ -74,17 +100,66 @@ const Dashboard = () => {
     }
   }
 
-  const handleEmailClick = (emailId: number, isRead: boolean) => {
-    if (!isRead) {
-      updateEmailMutation.mutate({
-        emailId,
-        updates: { is_read: true }
-      })
+  // Enhanced email click handler with new tab support
+  const handleEmailClick = (
+    emailId: number, 
+    isRead: boolean, 
+    event: React.MouseEvent<HTMLDivElement>
+  ) => {
+    // Prevent default if it's a right click
+    if (event.button === 2) return
+
+    // Check for Ctrl+Click (Windows/Linux) or Cmd+Click (Mac)
+    const isCtrlClick = event.ctrlKey || event.metaKey
+    const isMiddleClick = event.button === 1
+    
+    if (isCtrlClick || isMiddleClick) {
+      // Open in new tab
+      event.preventDefault()
+      window.open(`${window.location.origin}/email/${emailId}`, '_blank', 'noopener,noreferrer')
+    } else {
+      // Normal click - open in modal
+      if (!isRead) {
+        updateEmailMutation.mutate({
+          emailId,
+          updates: { is_read: true }
+        })
+      }
+      setSelectedEmailId(emailId)
     }
-    setSelectedEmailId(emailId)
   }
 
-  const handleStarToggle = (emailId: number, isStarred: boolean) => {
+  // Handle right-click context menu
+  const handleEmailContextMenu = (
+    emailId: number,
+    event: React.MouseEvent<HTMLDivElement>
+  ) => {
+    event.preventDefault()
+    setContextMenu({
+      visible: true,
+      x: event.clientX,
+      y: event.clientY,
+      emailId
+    })
+  }
+
+  // Context menu actions
+  const handleOpenInNewTab = () => {
+    if (contextMenu.emailId) {
+      window.open(`${window.location.origin}/email/${contextMenu.emailId}`, '_blank', 'noopener,noreferrer')
+    }
+    setContextMenu(prev => ({ ...prev, visible: false }))
+  }
+
+  const handleOpenInViewer = () => {
+    if (contextMenu.emailId) {
+      setSelectedEmailId(contextMenu.emailId)
+    }
+    setContextMenu(prev => ({ ...prev, visible: false }))
+  }
+
+  const handleStarToggle = (emailId: number, isStarred: boolean, event: React.MouseEvent) => {
+    event.stopPropagation()
     updateEmailMutation.mutate({
       emailId,
       updates: { is_starred: !isStarred }
@@ -194,6 +269,32 @@ const Dashboard = () => {
 
   return (
     <div className="h-screen flex bg-gray-50">
+      {/* Context Menu */}
+      {contextMenu.visible && (
+        <div 
+          className="fixed bg-white border border-gray-200 rounded-lg shadow-lg z-50 py-2 min-w-48"
+          style={{ 
+            left: `${contextMenu.x}px`, 
+            top: `${contextMenu.y}px` 
+          }}
+        >
+          <button
+            onClick={handleOpenInNewTab}
+            className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center space-x-2 text-gray-700"
+          >
+            <ExternalLink className="w-4 h-4" />
+            <span>Open in new tab</span>
+          </button>
+          <button
+            onClick={handleOpenInViewer}
+            className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center space-x-2 text-gray-700"
+          >
+            <Eye className="w-4 h-4" />
+            <span>Open in viewer</span>
+          </button>
+        </div>
+      )}
+
       {/* Email Viewer Modal */}
       {selectedEmailId && (
         <EmailViewer
@@ -373,7 +474,7 @@ const Dashboard = () => {
                     : `No emails in ${activeFolder.toLowerCase()}.`
                   }
                 </p>
-                {activeFolder === 'INBOX' && (
+                {activeFolder === 'INBOX' && !searchQuery && (
                   <button 
                     onClick={handleSyncEmails}
                     disabled={syncEmailsMutation.isPending}
@@ -386,13 +487,26 @@ const Dashboard = () => {
             </div>
           ) : (
             <div className="bg-white">
+              {/* Helper text for keyboard shortcuts */}
+              <div className="px-6 py-2 bg-blue-50 border-b border-blue-100 text-sm text-blue-700">
+                <span className="font-medium">Tip:</span> Ctrl+Click or middle-click to open emails in new tabs. Right-click for more options.
+              </div>
+              
               {filteredEmails.map((email) => (
                 <div
                   key={email.id}
-                  onClick={() => handleEmailClick(email.id, email.is_read)}
-                  className={`p-6 border-b border-gray-200 hover:bg-gray-50 cursor-pointer transition-colors ${
+                  onClick={(e) => handleEmailClick(email.id, email.is_read, e)}
+                  onContextMenu={(e) => handleEmailContextMenu(email.id, e)}
+                  onMouseDown={(e) => {
+                    // Handle middle click
+                    if (e.button === 1) {
+                      handleEmailClick(email.id, email.is_read, e)
+                    }
+                  }}
+                  className={`group p-6 border-b border-gray-200 hover:bg-gray-50 cursor-pointer transition-colors select-none ${
                     !email.is_read ? 'bg-blue-50' : ''
                   }`}
+                  style={{ userSelect: 'none' }}
                 >
                   <div className="flex items-start space-x-4">
                     <div className="flex-shrink-0">
@@ -402,20 +516,18 @@ const Dashboard = () => {
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between mb-1">
-                        <p className={`text-sm ${!email.is_read ? 'font-semibold text-gray-900' : 'font-medium text-gray-700'}`}>
+                        <p className={`text-sm truncate ${!email.is_read ? 'font-semibold text-gray-900' : 'font-medium text-gray-700'}`}>
                           {email.sender_name || email.sender_email}
                         </p>
-                        <div className="flex items-center space-x-2">
+                        <div className="flex items-center space-x-2 flex-shrink-0">
                           <button
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              handleStarToggle(email.id, email.is_starred)
-                            }}
-                            className="p-1 hover:bg-gray-200 rounded"
+                            onClick={(e) => handleStarToggle(email.id, email.is_starred, e)}
+                            className="p-1 hover:bg-gray-200 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+                            title={email.is_starred ? 'Remove star' : 'Add star'}
                           >
                             <Star className={`w-4 h-4 ${email.is_starred ? 'text-yellow-400 fill-current' : 'text-gray-400'}`} />
                           </button>
-                          <span className="text-sm text-gray-500">
+                          <span className="text-sm text-gray-500 whitespace-nowrap">
                             {email.date_received 
                               ? formatDistanceToNow(new Date(email.date_received), { addSuffix: true })
                               : 'Unknown'
@@ -423,12 +535,20 @@ const Dashboard = () => {
                           </span>
                         </div>
                       </div>
-                      <p className={`text-sm mb-1 ${!email.is_read ? 'font-semibold text-gray-900' : 'text-gray-700'}`}>
+                      <p className={`text-sm mb-1 truncate ${!email.is_read ? 'font-semibold text-gray-900' : 'text-gray-700'}`}>
                         {email.subject || '(No Subject)'}
                       </p>
                       <p className="text-sm text-gray-500 line-clamp-2">
                         {email.body_text || email.body_html?.replace(/<[^>]*>/g, '') || 'No preview available'}
                       </p>
+                      {email.attachments && email.attachments.length > 0 && (
+                        <div className="flex items-center mt-2">
+                          <div className="w-4 h-4 text-gray-400 mr-1">📎</div>
+                          <span className="text-xs text-gray-500">
+                            {email.attachments.length} attachment{email.attachments.length > 1 ? 's' : ''}
+                          </span>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
