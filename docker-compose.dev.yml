@@ -1,0 +1,105 @@
+version: '3.8'
+
+# Development overrides for docker-compose.yml
+# Use with: docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
+
+services:
+  # Database with exposed port for development access
+  database:
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: emailclient_dev
+      POSTGRES_USER: emailuser_dev
+      POSTGRES_PASSWORD: devpass123
+
+  # Redis with exposed port
+  redis:
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+
+  # Backend with development settings
+  backend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+      target: development
+    environment:
+      DEBUG: "true"
+      DATABASE_URL: postgresql://emailuser_dev:devpass123@database:5432/emailclient_dev
+      SECRET_KEY: dev-secret-key-not-for-production
+    volumes:
+      # Mount source code for hot reloading
+      - ./backend:/app:delegated
+      - backend_uploads:/app/uploads
+      - backend_data:/app/data
+      - backend_logs:/app/logs
+    command: >
+      sh -c "pip install watchdog &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    ports:
+      - "8000:8000"
+
+  # Frontend with development server
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.frontend
+      target: development
+    environment:
+      VITE_API_URL: http://localhost:8000
+    volumes:
+      # Mount source code for hot reloading
+      - ./frontend:/app:delegated
+      - /app/node_modules
+    command: npm run dev -- --host 0.0.0.0
+    ports:
+      - "5173:5173"
+
+  # Include Mailpit for email testing in development
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: email-client-mailpit-dev
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: 1
+      MP_SMTP_AUTH_ALLOW_INSECURE: 1
+    networks:
+      - email-network
+
+  # PostgreSQL Admin (pgAdmin) for database management
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: email-client-pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@emailclient.dev
+      PGADMIN_DEFAULT_PASSWORD: admin123
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    ports:
+      - "5050:80"
+    depends_on:
+      - database
+    networks:
+      - email-network
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+
+  # Redis Commander for Redis management
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: email-client-redis-commander
+    environment:
+      REDIS_HOSTS: local:redis:6379
+    ports:
+      - "8081:8081"
+    depends_on:
+      - redis
+    networks:
+      - email-network
+
+volumes:
+  pgadmin_data:
+    driver: local

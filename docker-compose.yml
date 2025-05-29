@@ -1,0 +1,158 @@
+version: '3.8'
+
+services:
+  # Database Service
+  database:
+    image: postgres:15-alpine
+    container_name: email-client-db
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-emailclient}
+      POSTGRES_USER: ${POSTGRES_USER:-emailuser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-emailpass123}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    ports:
+      - "5432:5432"
+    networks:
+      - email-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-emailuser}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Redis Service (for caching and session management)
+  redis:
+    image: redis:7-alpine
+    container_name: email-client-redis
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-redispass123}
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - email-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Backend Service
+  backend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+      target: production
+    container_name: email-client-backend
+    environment:
+      # Database Configuration
+      DATABASE_URL: postgresql://${POSTGRES_USER:-emailuser}:${POSTGRES_PASSWORD:-emailpass123}@database:5432/${POSTGRES_DB:-emailclient}
+      
+      # Security
+      SECRET_KEY: ${SECRET_KEY:-your-super-secret-key-change-in-production}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
+      
+      # Server Configuration
+      HOST: 0.0.0.0
+      PORT: 8000
+      DEBUG: ${DEBUG:-false}
+      
+      # Email Server Defaults (one.com)
+      DEFAULT_IMAP_HOST: ${DEFAULT_IMAP_HOST:-imap.one.com}
+      DEFAULT_IMAP_PORT: ${DEFAULT_IMAP_PORT:-993}
+      DEFAULT_IMAP_SSL: ${DEFAULT_IMAP_SSL:-true}
+      DEFAULT_POP3_HOST: ${DEFAULT_POP3_HOST:-pop.one.com}
+      DEFAULT_POP3_PORT: ${DEFAULT_POP3_PORT:-995}
+      DEFAULT_POP3_SSL: ${DEFAULT_POP3_SSL:-true}
+      DEFAULT_SMTP_HOST: ${DEFAULT_SMTP_HOST:-send.one.com}
+      DEFAULT_SMTP_PORT: ${DEFAULT_SMTP_PORT:-465}
+      DEFAULT_SMTP_SSL: ${DEFAULT_SMTP_SSL:-true}
+      
+      # File Upload
+      MAX_FILE_SIZE: ${MAX_FILE_SIZE:-5242880}
+      UPLOAD_DIR: ./uploads
+      
+      # Redis Configuration
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redispass123}@redis:6379/0
+    volumes:
+      - backend_uploads:/app/uploads
+      - backend_data:/app/data
+      - backend_logs:/app/logs
+    ports:
+      - "8000:8000"
+    depends_on:
+      database:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - email-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+
+  # Frontend Service
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.frontend
+      target: production
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
+        VITE_APP_NAME: ${VITE_APP_NAME:-Personal Email Client}
+        VITE_APP_VERSION: ${VITE_APP_VERSION:-1.0.0}
+    container_name: email-client-frontend
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - email-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # Optional: Mailpit for testing email functionality
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: email-client-mailpit
+    ports:
+      - "1025:1025" # SMTP
+      - "8025:8025" # Web interface
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: 1
+      MP_SMTP_AUTH_ALLOW_INSECURE: 1
+    networks:
+      - email-network
+    profiles:
+      - testing
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  backend_uploads:
+    driver: local
+  backend_data:
+    driver: local
+  backend_logs:
+    driver: local
+
+networks:
+  email-network:
+    driver: bridge
