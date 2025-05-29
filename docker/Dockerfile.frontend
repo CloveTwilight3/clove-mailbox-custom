@@ -1,4 +1,4 @@
-# Frontend Dockerfile - Skip TypeScript checking for faster build
+# Frontend Dockerfile - Simplified version
 # Save as: docker/Dockerfile.frontend
 
 FROM node:18-alpine as build
@@ -23,21 +23,6 @@ ARG VITE_APP_VERSION="1.0.0"
 ENV VITE_API_URL=$VITE_API_URL
 ENV VITE_APP_NAME=$VITE_APP_NAME
 ENV VITE_APP_VERSION=$VITE_APP_VERSION
-
-# Create vite environment definitions
-RUN cat > src/vite-env.d.ts << 'EOF'
-/// <reference types="vite/client" />
-
-interface ImportMetaEnv {
-  readonly VITE_API_URL: string
-  readonly VITE_APP_NAME: string
-  readonly VITE_APP_VERSION: string
-}
-
-interface ImportMeta {
-  readonly env: ImportMetaEnv
-}
-EOF
 
 # Update package.json to skip TypeScript checking in build
 RUN npm pkg set scripts.build="vite build"

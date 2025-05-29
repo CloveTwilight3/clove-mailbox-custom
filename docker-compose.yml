@@ -104,7 +104,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.frontend
-      target: production
+      # target: production
       args:
         VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
         VITE_APP_NAME: ${VITE_APP_NAME:-Personal Email Client}
